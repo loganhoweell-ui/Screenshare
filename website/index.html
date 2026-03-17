@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScreenShare Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0a;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── CONNECT SCREEN ── */
+  #connect-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+  }
+
+  .card {
+    background: #161616;
+    border: 1px solid #2a2a2a;
+    border-radius: 16px;
+    padding: 40px;
+    width: 380px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .card h1 { font-size: 20px; font-weight: 600; }
+  .card p  { font-size: 13px; color: #666; margin-top: -12px; }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 12px; color: #888; font-weight: 500; letter-spacing: .5px; text-transform: uppercase; }
+  .field input {
+    background: #0a0a0a;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .field input:focus { border-color: #555; }
+  .field input::placeholder { color: #444; }
+
+  #connect-btn {
+    background: #fff;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px;
+    cursor: pointer;
+    transition: opacity .15s;
+    margin-top: 4px;
+  }
+  #connect-btn:hover { opacity: .85; }
+
+  .hint { font-size: 11px; color: #444; text-align: center; }
+  .hint a { color: #666; }
+
+  /* ── VIEWER SCREEN ── */
+  #viewer-screen {
+    display: none;
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* HUD */
+  #hud {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .pill {
+    background: rgba(0,0,0,.7);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,.08);
+    color: #fff;
+    font: 11px/1 monospace;
+    padding: 5px 10px;
+    border-radius: 99px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+
+  #live-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #555;
+    flex-shrink: 0;
+  }
+  #live-dot.live    { background: #22c55e; animation: pulse 2s infinite; }
+  #live-dot.waiting { background: #f59e0b; }
+  #live-dot.offline { background: #ef4444; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* disconnect button */
+  #disconnect-btn {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    background: rgba(0,0,0,.7);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,.08);
+    color: #888;
+    font-size: 11px;
+    padding: 5px 12px;
+    border-radius: 99px;
+    cursor: pointer;
+    transition: color .15s;
+  }
+  #disconnect-btn:hover { color: #fff; }
+
+  /* Offline overlay */
+  #offline-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    color: #444;
+    font-size: 15px;
+  }
+  #offline-overlay.show { display: flex; }
+  #offline-overlay span:first-child { font-size: 52px; }
+</style>
+</head>
+<body>
+
+<!-- ── CONNECT SCREEN ── -->
+<div id="connect-screen">
+  <div class="card">
+    <div>
+      <h1>ScreenShare Viewer</h1>
+      <p>Enter your server details to connect</p>
+    </div>
+
+    <div class="field">
+      <label>Server URL</label>
+      <input id="inp-server" type="text" placeholder="wss://myapp.railway.app" autocomplete="off" />
+    </div>
+
+    <div class="field">
+      <label>Secret</label>
+      <input id="inp-secret" type="password" placeholder="changeme" autocomplete="off" />
+    </div>
+
+    <button id="connect-btn">Connect</button>
+
+    <p class="hint">
+      Don't have a server?
+      <a href="https://github.com" target="_blank">See setup guide</a>
+    </p>
+  </div>
+</div>
+
+<!-- ── VIEWER SCREEN ── -->
+<div id="viewer-screen">
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <div class="pill">
+      <div id="live-dot" class="waiting"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+    <div class="pill" id="fps-pill">-- fps</div>
+    <div class="pill" id="res-pill">--</div>
+  </div>
+
+  <button id="disconnect-btn" onclick="disconnect()">✕ Disconnect</button>
+
+  <div id="offline-overlay">
+    <span>📺</span>
+    <span>Broadcaster is offline</span>
+    <span style="font-size:12px;color:#333">Start the client to begin streaming</span>
+  </div>
+</div>
+
+<script>
+// ── Read URL params (for shareable links) ──────────────────────────────────────
+const params = new URLSearchParams(location.search);
+const urlServer = params.get('server');
+const urlSecret = params.get('secret');
+
+if (urlServer) document.getElementById('inp-server').value = urlServer;
+if (urlSecret) document.getElementById('inp-secret').value = urlSecret;
+
+// Auto-connect if both params are in URL
+if (urlServer && urlSecret) startViewer(urlServer, urlSecret);
+
+// ── Connect button ─────────────────────────────────────────────────────────────
+document.getElementById('connect-btn').addEventListener('click', () => {
+  const server = document.getElementById('inp-server').value.trim();
+  const secret = document.getElementById('inp-secret').value.trim();
+  if (!server) { alert('Enter a server URL'); return; }
+  startViewer(server, secret || 'changeme');
+});
+
+document.getElementById('inp-secret').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('connect-btn').click();
+});
+
+// ── Viewer ─────────────────────────────────────────────────────────────────────
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const liveDot = document.getElementById('live-dot');
+const statusEl = document.getElementById('status-text');
+const fpsPill = document.getElementById('fps-pill');
+const resPill = document.getElementById('res-pill');
+const offlineOverlay = document.getElementById('offline-overlay');
+
+let ws = null;
+let stopReconnect = false;
+
+// FPS counter
+let frameCount = 0, lastFpsTs = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const fps = Math.round(frameCount / ((now - lastFpsTs) / 1000));
+  fpsPill.textContent = `${fps} fps`;
+  frameCount = 0;
+  lastFpsTs = now;
+}, 1000);
+
+// Canvas resize
+function resizeCanvas() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Draw queue — always show latest frame, skip stale ones
+let pendingBlob = null;
+let isDrawing = false;
+
+function drawNext() {
+  if (isDrawing || !pendingBlob) return;
+  isDrawing = true;
+  const blob = pendingBlob;
+  pendingBlob = null;
+
+  createImageBitmap(blob).then(bmp => {
+    const cw = canvas.width, ch = canvas.height;
+    const scale = Math.min(cw / bmp.width, ch / bmp.height);
+    const dw = bmp.width * scale, dh = bmp.height * scale;
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(bmp, dx, dy, dw, dh);
+    resPill.textContent = `${bmp.width}×${bmp.height}`;
+    bmp.close();
+    frameCount++;
+    isDrawing = false;
+    drawNext();
+  }).catch(() => { isDrawing = false; });
+}
+
+function setStatus(text, state) {
+  statusEl.textContent = text;
+  liveDot.className = state;
+}
+
+function startViewer(serverUrl, secret) {
+  stopReconnect = false;
+  document.getElementById('connect-screen').style.display = 'none';
+  document.getElementById('viewer-screen').style.display  = 'block';
+  connectWs(serverUrl, secret);
+}
+
+function connectWs(serverUrl, secret) {
+  if (stopReconnect) return;
+  setStatus('Connecting…', 'waiting');
+
+  ws = new WebSocket(`${serverUrl}?role=viewer&secret=${secret}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => setStatus('Waiting for stream…', 'waiting');
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'offline') {
+          offlineOverlay.classList.add('show');
+          setStatus('Broadcaster offline', 'offline');
+          fpsPill.textContent = '-- fps';
+        }
+      } catch {}
+      return;
+    }
+
+    offlineOverlay.classList.remove('show');
+    setStatus('Live', 'live');
+    pendingBlob = new Blob([e.data], { type: 'image/jpeg' });
+    drawNext();
+  };
+
+  ws.onclose = () => {
+    if (stopReconnect) return;
+    setStatus('Reconnecting…', 'offline');
+    setTimeout(() => connectWs(serverUrl, secret), 1500);
+  };
+
+  ws.onerror = () => setStatus('Connection error', 'offline');
+}
+
+function disconnect() {
+  stopReconnect = true;
+  if (ws) ws.close();
+  document.getElementById('viewer-screen').style.display  = 'none';
+  document.getElementById('connect-screen').style.display = 'flex';
+  setStatus('Connecting…', 'waiting');
+  offlineOverlay.classList.remove('show');
+  fpsPill.textContent = '-- fps';
+  resPill.textContent = '--';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+</script>
+</body>
+</html>

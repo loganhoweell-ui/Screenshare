@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Screen Share</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; width: 100vw; height: 100vh; overflow: hidden; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: auto;
+  }
+
+  #hud {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .pill {
+    background: rgba(0,0,0,0.65);
+    color: #fff;
+    font: 12px/1 monospace;
+    padding: 5px 10px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #555;
+  }
+  #dot.live       { background: #2ecc71; animation: blink 2s infinite; }
+  #dot.waiting    { background: #f39c12; }
+  #dot.offline    { background: #e74c3c; }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  #offline-banner {
+    display: none;
+    position: fixed;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    color: #666;
+    font: 18px sans-serif;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #offline-banner.show { display: flex; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div class="pill"><div id="dot" class="waiting"></div><span id="statusText">Connecting…</span></div>
+  <div class="pill" id="fpsEl">-- fps</div>
+  <div class="pill" id="sizeEl">--</div>
+</div>
+
+<div id="offline-banner">
+  <span style="font-size:48px">📺</span>
+  <span>Broadcaster offline</span>
+</div>
+
+<script>
+const canvas  = document.getElementById('c');
+const ctx     = canvas.getContext('2d');
+const dot     = document.getElementById('dot');
+const statusEl = document.getElementById('statusText');
+const fpsEl   = document.getElementById('fpsEl');
+const sizeEl  = document.getElementById('sizeEl');
+const banner  = document.getElementById('offline-banner');
+
+// Fit canvas to window
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Secret from URL: ?secret=xxx
+const secret = new URLSearchParams(location.search).get('secret') || 'changeme';
+
+// FPS counter
+let frames = 0, lastFpsTime = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const fps = Math.round(frames / ((now - lastFpsTime) / 1000));
+  fpsEl.textContent = `${fps} fps`;
+  frames = 0;
+  lastFpsTime = now;
+}, 1000);
+
+// Decode + draw queue so we never drop behind
+let pending = null;
+let drawing = false;
+
+function schedDraw() {
+  if (drawing || !pending) return;
+  drawing = true;
+  const blob = pending;
+  pending = null;
+
+  createImageBitmap(blob).then(bmp => {
+    // Letterbox draw
+    const cw = canvas.width, ch = canvas.height;
+    const scale = Math.min(cw / bmp.width, ch / bmp.height);
+    const dw = bmp.width * scale, dh = bmp.height * scale;
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(bmp, dx, dy, dw, dh);
+    bmp.close();
+
+    sizeEl.textContent = `${bmp.width}×${bmp.height}`;
+    frames++;
+    drawing = false;
+    schedDraw(); // draw next if queued
+  });
+}
+
+function setStatus(text, state) {
+  statusEl.textContent = text;
+  dot.className = state;
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}?role=viewer&secret=${secret}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen  = () => setStatus('Waiting for stream…', 'waiting');
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'offline') {
+          banner.classList.add('show');
+          setStatus('Offline', 'offline');
+          fpsEl.textContent = '-- fps';
+        }
+      } catch {}
+      return;
+    }
+
+    // Binary frame
+    banner.classList.remove('show');
+    setStatus('Live', 'live');
+    pending = new Blob([e.data], { type: 'image/jpeg' });
+    schedDraw();
+  };
+
+  ws.onclose = () => {
+    setStatus('Reconnecting…', 'offline');
+    setTimeout(connect, 1500);
+  };
+}
+
+connect();
+</script>
+</body>
+</html>
