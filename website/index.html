@@ -15,7 +15,6 @@
     overflow: hidden;
   }
 
-  /* ── CONNECT SCREEN ── */
   #connect-screen {
     display: flex;
     align-items: center;
@@ -66,10 +65,6 @@
   }
   #connect-btn:hover { opacity: .85; }
 
-  .hint { font-size: 11px; color: #444; text-align: center; }
-  .hint a { color: #666; }
-
-  /* ── VIEWER SCREEN ── */
   #viewer-screen {
     display: none;
     position: relative;
@@ -81,9 +76,10 @@
     display: block;
     width: 100%;
     height: 100%;
+    cursor: default;
   }
+  canvas.interactive { cursor: none; }
 
-  /* HUD */
   #hud {
     position: fixed;
     top: 14px;
@@ -91,6 +87,7 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    pointer-events: none;
   }
 
   .pill {
@@ -111,18 +108,21 @@
     width: 6px; height: 6px;
     border-radius: 50%;
     background: #555;
-    flex-shrink: 0;
   }
   #live-dot.live    { background: #22c55e; animation: pulse 2s infinite; }
   #live-dot.waiting { background: #f59e0b; }
   #live-dot.offline { background: #ef4444; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-  /* disconnect button */
-  #disconnect-btn {
+  #controls {
     position: fixed;
     top: 14px;
     right: 14px;
+    display: flex;
+    gap: 8px;
+  }
+
+  .ctrl-btn {
     background: rgba(0,0,0,.7);
     backdrop-filter: blur(8px);
     border: 1px solid rgba(255,255,255,.08);
@@ -131,11 +131,12 @@
     padding: 5px 12px;
     border-radius: 99px;
     cursor: pointer;
-    transition: color .15s;
+    transition: color .15s, background .15s;
+    white-space: nowrap;
   }
-  #disconnect-btn:hover { color: #fff; }
+  .ctrl-btn:hover { color: #fff; }
+  .ctrl-btn.active { background: rgba(255,255,255,.12); color: #fff; }
 
-  /* Offline overlay */
   #offline-overlay {
     display: none;
     position: fixed;
@@ -153,102 +154,86 @@
 </head>
 <body>
 
-<!-- ── CONNECT SCREEN ── -->
 <div id="connect-screen">
   <div class="card">
     <div>
       <h1>ScreenShare Viewer</h1>
       <p>Enter your server details to connect</p>
     </div>
-
     <div class="field">
       <label>Server URL</label>
       <input id="inp-server" type="text" placeholder="wss://myapp.railway.app" autocomplete="off" />
     </div>
-
     <div class="field">
       <label>Secret</label>
       <input id="inp-secret" type="password" placeholder="changeme" autocomplete="off" />
     </div>
-
     <button id="connect-btn">Connect</button>
-
-    <p class="hint">
-      Don't have a server?
-      <a href="https://github.com" target="_blank">See setup guide</a>
-    </p>
   </div>
 </div>
 
-<!-- ── VIEWER SCREEN ── -->
 <div id="viewer-screen">
-  <canvas id="canvas"></canvas>
+  <canvas id="canvas" tabindex="0"></canvas>
 
   <div id="hud">
-    <div class="pill">
-      <div id="live-dot" class="waiting"></div>
-      <span id="status-text">Connecting…</span>
-    </div>
+    <div class="pill"><div id="live-dot" class="waiting"></div><span id="status-text">Connecting…</span></div>
     <div class="pill" id="fps-pill">-- fps</div>
     <div class="pill" id="res-pill">--</div>
   </div>
 
-  <button id="disconnect-btn" onclick="disconnect()">✕ Disconnect</button>
+  <div id="controls">
+    <button class="ctrl-btn" id="control-btn" onclick="toggleControl()">🖱 Enable Control</button>
+    <button class="ctrl-btn" onclick="disconnect()">✕ Disconnect</button>
+  </div>
 
   <div id="offline-overlay">
     <span>📺</span>
     <span>Broadcaster is offline</span>
-    <span style="font-size:12px;color:#333">Start the client to begin streaming</span>
   </div>
 </div>
 
 <script>
-// ── Read URL params (for shareable links) ──────────────────────────────────────
 const params = new URLSearchParams(location.search);
 const urlServer = params.get('server');
 const urlSecret = params.get('secret');
-
 if (urlServer) document.getElementById('inp-server').value = urlServer;
 if (urlSecret) document.getElementById('inp-secret').value = urlSecret;
-
-// Auto-connect if both params are in URL
 if (urlServer && urlSecret) startViewer(urlServer, urlSecret);
 
-// ── Connect button ─────────────────────────────────────────────────────────────
 document.getElementById('connect-btn').addEventListener('click', () => {
   const server = document.getElementById('inp-server').value.trim();
   const secret = document.getElementById('inp-secret').value.trim();
   if (!server) { alert('Enter a server URL'); return; }
   startViewer(server, secret || 'changeme');
 });
-
 document.getElementById('inp-secret').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('connect-btn').click();
 });
 
-// ── Viewer ─────────────────────────────────────────────────────────────────────
-const canvas  = document.getElementById('canvas');
-const ctx     = canvas.getContext('2d');
-const liveDot = document.getElementById('live-dot');
+// ── Viewer ────────────────────────────────────────────────────────────────────
+const canvas   = document.getElementById('canvas');
+const ctx      = canvas.getContext('2d');
+const liveDot  = document.getElementById('live-dot');
 const statusEl = document.getElementById('status-text');
-const fpsPill = document.getElementById('fps-pill');
-const resPill = document.getElementById('res-pill');
+const fpsPill  = document.getElementById('fps-pill');
+const resPill  = document.getElementById('res-pill');
 const offlineOverlay = document.getElementById('offline-overlay');
+const controlBtn = document.getElementById('control-btn');
 
 let ws = null;
 let stopReconnect = false;
+let controlEnabled = false;
+let imgBounds = { dx: 0, dy: 0, dw: 1, dh: 1 };
 
-// FPS counter
+// FPS
 let frameCount = 0, lastFpsTs = performance.now();
 setInterval(() => {
-  const now = performance.now();
-  const fps = Math.round(frameCount / ((now - lastFpsTs) / 1000));
+  const fps = Math.round(frameCount / ((performance.now() - lastFpsTs) / 1000));
   fpsPill.textContent = `${fps} fps`;
   frameCount = 0;
-  lastFpsTs = now;
+  lastFpsTs = performance.now();
 }, 1000);
 
-// Canvas resize
 function resizeCanvas() {
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
@@ -256,24 +241,21 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// Draw queue — always show latest frame, skip stale ones
-let pendingBlob = null;
-let isDrawing = false;
-
+// Draw queue
+let pendingBlob = null, isDrawing = false;
 function drawNext() {
   if (isDrawing || !pendingBlob) return;
   isDrawing = true;
   const blob = pendingBlob;
   pendingBlob = null;
-
   createImageBitmap(blob).then(bmp => {
     const cw = canvas.width, ch = canvas.height;
     const scale = Math.min(cw / bmp.width, ch / bmp.height);
     const dw = bmp.width * scale, dh = bmp.height * scale;
     const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
-
     ctx.clearRect(0, 0, cw, ch);
     ctx.drawImage(bmp, dx, dy, dw, dh);
+    imgBounds = { dx, dy, dw, dh };
     resPill.textContent = `${bmp.width}×${bmp.height}`;
     bmp.close();
     frameCount++;
@@ -282,6 +264,78 @@ function drawNext() {
   }).catch(() => { isDrawing = false; });
 }
 
+// ── Remote control ────────────────────────────────────────────────────────────
+function canvasToNorm(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width  / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const px = (clientX - rect.left)  * scaleX;
+  const py = (clientY - rect.top)   * scaleY;
+  const nx = (px - imgBounds.dx) / imgBounds.dw;
+  const ny = (py - imgBounds.dy) / imgBounds.dh;
+  return {
+    x: Math.max(0, Math.min(1, nx)),
+    y: Math.max(0, Math.min(1, ny))
+  };
+}
+
+function sendInput(obj) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !controlEnabled) return;
+  ws.send(JSON.stringify(obj));
+}
+
+const BTN_MAP = ['left', 'middle', 'right'];
+
+canvas.addEventListener('mousemove', e => {
+  if (!controlEnabled) return;
+  const { x, y } = canvasToNorm(e.clientX, e.clientY);
+  sendInput({ type: 'mousemove', x, y });
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (!controlEnabled) return;
+  canvas.focus();
+  const { x, y } = canvasToNorm(e.clientX, e.clientY);
+  sendInput({ type: 'mousedown', x, y, button: BTN_MAP[e.button] || 'left' });
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (!controlEnabled) return;
+  const { x, y } = canvasToNorm(e.clientX, e.clientY);
+  sendInput({ type: 'mouseup', x, y, button: BTN_MAP[e.button] || 'left' });
+});
+
+canvas.addEventListener('contextmenu', e => {
+  if (controlEnabled) e.preventDefault();
+});
+
+canvas.addEventListener('wheel', e => {
+  if (!controlEnabled) return;
+  e.preventDefault();
+  sendInput({ type: 'scroll', delta: e.deltaY });
+}, { passive: false });
+
+canvas.addEventListener('keydown', e => {
+  if (!controlEnabled) return;
+  e.preventDefault();
+  sendInput({ type: 'keydown', key: e.key });
+});
+
+canvas.addEventListener('keyup', e => {
+  if (!controlEnabled) return;
+  e.preventDefault();
+  sendInput({ type: 'keyup', key: e.key });
+});
+
+function toggleControl() {
+  controlEnabled = !controlEnabled;
+  canvas.classList.toggle('interactive', controlEnabled);
+  controlBtn.classList.toggle('active', controlEnabled);
+  controlBtn.textContent = controlEnabled ? '🖱 Control ON' : '🖱 Enable Control';
+  if (controlEnabled) canvas.focus();
+}
+
+// ── Connection ────────────────────────────────────────────────────────────────
 function setStatus(text, state) {
   statusEl.textContent = text;
   liveDot.className = state;
@@ -297,7 +351,6 @@ function startViewer(serverUrl, secret) {
 function connectWs(serverUrl, secret) {
   if (stopReconnect) return;
   setStatus('Connecting…', 'waiting');
-
   ws = new WebSocket(`${serverUrl}?role=viewer&secret=${secret}`);
   ws.binaryType = 'arraybuffer';
 
@@ -315,7 +368,6 @@ function connectWs(serverUrl, secret) {
       } catch {}
       return;
     }
-
     offlineOverlay.classList.remove('show');
     setStatus('Live', 'live');
     pendingBlob = new Blob([e.data], { type: 'image/jpeg' });
@@ -327,16 +379,17 @@ function connectWs(serverUrl, secret) {
     setStatus('Reconnecting…', 'offline');
     setTimeout(() => connectWs(serverUrl, secret), 1500);
   };
-
-  ws.onerror = () => setStatus('Connection error', 'offline');
 }
 
 function disconnect() {
   stopReconnect = true;
+  controlEnabled = false;
+  canvas.classList.remove('interactive');
+  controlBtn.classList.remove('active');
+  controlBtn.textContent = '🖱 Enable Control';
   if (ws) ws.close();
   document.getElementById('viewer-screen').style.display  = 'none';
   document.getElementById('connect-screen').style.display = 'flex';
-  setStatus('Connecting…', 'waiting');
   offlineOverlay.classList.remove('show');
   fpsPill.textContent = '-- fps';
   resPill.textContent = '--';
